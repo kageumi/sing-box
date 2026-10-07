@@ -8,12 +8,13 @@ INSTALL_DIR="${BASE_DIR}/bin"
 CONFIG_DIR="${BASE_DIR}/config"
 SERVICE_FILE="/etc/systemd/system/sing-box.service"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
-DOMAIN="updates.cdn-apple.com"
+DOMAIN="itunes.apple.com"
 PORT=443
-UUID=$(cat /proc/sys/kernel/random/uuid)
+UUID=""
 PRIVATE_KEY=""
 PUBLIC_KEY=""
-SHORT_ID=$(openssl rand -hex 8)
+SHORT_ID=""
+TEMP_DIR=""
 
 # 颜色定义
 GREEN="\033[1;32m"
@@ -24,41 +25,53 @@ NC="\033[0m"
 
 # 日志函数
 log() {
-  echo -e "${GREEN}[INFO]${NC} $1"
+  echo -e "${GREEN}[信息]${NC} $1"
 }
 
 warn() {
-  echo -e "${YELLOW}[WARN]${NC} $1"
+  echo -e "${YELLOW}[提醒]${NC} $1"
 }
 
 error() {
-  echo -e "${RED}[ERROR]${NC} $1"
+  echo -e "${RED}[错误]${NC} $1"
 }
 
-# 显示帮助信息
+# 显示帮助
 show_help() {
-  echo -e "${BLUE}sing-box VLESS REALITY 安装脚本${NC}"
-  echo -e "用法: $0 [选项]"
+  echo -e "${BLUE}sing-box 安装 · VLESS + REALITY${NC}"
+  echo -e "用法：$0 [选项]"
   echo
-  echo -e "选项:"
-  echo -e "  ${GREEN}-port${NC}        设置监听端口 (默认: 443)"
-  echo -e "  ${GREEN}-uuid${NC}        设置 VLESS UUID (默认: 随机生成)"
-  echo -e "  ${GREEN}-uninstall${NC}   卸载 sing-box 服务及所有相关文件"
-  echo -e "  ${GREEN}-help${NC}        显示帮助信息"
+  echo -e "选项："
+  echo -e "  ${GREEN}-port${NC}        监听端口（1–65535，默认 443）"
+  echo -e "  ${GREEN}-uuid${NC}        UUID v4（默认自动生成）"
+  echo -e "  ${GREEN}-uninstall${NC}   卸载并删除程序、配置"
+  echo -e "  ${GREEN}-help${NC}        显示帮助"
 }
 
 # 参数解析
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -port)
-      if [[ -z "$2" || ! "$2" =~ ^[0-9]+$ ]]; then
-        error "端口必须是有效的数字"
+      if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
+        error "端口无效，用法：-port 443（1–65535）"
         exit 1
       fi
       PORT="$2"
+      # 先去除前导零并限制长度，避免八进制解释和整数溢出。
+      while [[ ${#PORT} -gt 1 && "$PORT" == 0* ]]; do
+        PORT="${PORT:1}"
+      done
+      if [[ ${#PORT} -gt 5 ]] || (( 10#$PORT < 1 || 10#$PORT > 65535 )); then
+        error "端口无效，用法：-port 443（1–65535）"
+        exit 1
+      fi
       shift 2
       ;;
     -uuid)
+      if [[ $# -lt 2 || ! "$2" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-4[[:xdigit:]]{3}-[89aAbB][[:xdigit:]]{3}-[[:xdigit:]]{12}$ ]]; then
+        error "UUID 无效，-uuid 仅支持 UUID v4"
+        exit 1
+      fi
       UUID="$2"
       shift 2
       ;;
@@ -71,7 +84,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      error "未知参数: $1"
+      error "未知参数：$1"
       show_help
       exit 1
       ;;
@@ -80,19 +93,19 @@ done
 
 # 检查是否为 root 用户
 if [ "$EUID" -ne 0 ]; then
-  error "请使用 root 用户运行此脚本"
+  error "需要 root 权限：sudo bash install.sh"
   exit 1
 fi
 
 # 卸载函数
 uninstall() {
-  log "开始卸载 sing-box 服务和相关文件..."
+  log "卸载 sing-box…"
   systemctl stop sing-box 2>/dev/null
   systemctl disable sing-box 2>/dev/null
   rm -f "$SERVICE_FILE"
   systemctl daemon-reload
   rm -rf "$BASE_DIR"
-  log "卸载完成！"
+  log "卸载操作结束"
   exit 0
 }
 
@@ -103,27 +116,49 @@ fi
 
 # 安装依赖
 install_dependencies() {
-  log "安装必要的依赖..."
+  log "安装依赖…"
   if command -v apt-get > /dev/null; then
     apt-get update -qq && apt-get install -y -qq curl wget jq openssl || {
-      error "安装依赖失败，请检查网络连接或手动安装"
+      error "依赖安装失败，请检查软件源和网络"
       exit 1
     }
   elif command -v yum > /dev/null; then
     yum install -y -q curl wget jq openssl || {
-      error "安装依赖失败，请检查网络连接或手动安装"
+      error "依赖安装失败，请检查软件源和网络"
       exit 1
     }
   else
-    error "不支持的包管理器，请手动安装 curl、wget、jq 和 openssl"
+    error "系统不支持，需要 apt-get 或 yum"
     exit 1
   fi
-  log "依赖安装完成！"
+  log "依赖已就绪"
+}
+
+# 依赖就绪后生成默认 UUID 和短 ID
+initialize_config_values() {
+  if [[ -z "$UUID" ]]; then
+    UUID=$(cat /proc/sys/kernel/random/uuid) || {
+      error "UUID 生成失败，可用 -uuid 指定 UUID v4"
+      exit 1
+    }
+    if [[ ! "$UUID" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-4[[:xdigit:]]{3}-[89aAbB][[:xdigit:]]{3}-[[:xdigit:]]{12}$ ]]; then
+      error "生成的 UUID 无效，请用 -uuid 指定 UUID v4"
+      exit 1
+    fi
+  fi
+  SHORT_ID=$(openssl rand -hex 8) || {
+    error "短 ID 生成失败，请检查 openssl"
+    exit 1
+  }
+  if [[ -z "$SHORT_ID" ]]; then
+    error "短 ID 为空，请检查 openssl"
+    exit 1
+  fi
 }
 
 # 检测系统架构
 determine_architecture() {
-  log "检测系统架构..."
+  log "检测架构…"
   ARCH=$(uname -m)
   case "$ARCH" in
     x86_64) ARCH="amd64" ;;
@@ -142,78 +177,95 @@ determine_architecture() {
       exit 1
       ;;
   esac
-  log "检测到架构：$ARCH"
+  log "架构：$ARCH"
 }
 
 # 安装 sing-box
 install_sing_box() {
-  log "下载并安装 sing-box..."
-  mkdir -p "$INSTALL_DIR"
+  log "准备安装…"
+  mkdir -p "$INSTALL_DIR" || {
+    error "安装目录创建失败：$INSTALL_DIR"
+    exit 1
+  }
 
   # 获取最新版本
-  LATEST_VERSION=$(curl -s -m 10 https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
+  VERSION_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 10 https://api.github.com/repos/SagerNet/sing-box/releases/latest) &&
+    LATEST_VERSION=$(printf '%s' "$VERSION_RESPONSE" | jq -r .tag_name) || LATEST_VERSION=""
   if [[ -z "$LATEST_VERSION" || "$LATEST_VERSION" == "null" ]]; then
-    warn "获取最新版本失败，尝试使用备用方法..."
-    LATEST_VERSION=$(curl -s -m 10 https://api.github.com/repos/SagerNet/sing-box/tags | jq -r '.[0].name')
+    warn "版本查询失败，尝试备用查询…"
+    VERSION_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 10 https://api.github.com/repos/SagerNet/sing-box/tags) &&
+      LATEST_VERSION=$(printf '%s' "$VERSION_RESPONSE" | jq -r '.[0].name') || LATEST_VERSION=""
     
     if [[ -z "$LATEST_VERSION" || "$LATEST_VERSION" == "null" ]]; then
-      error "无法获取 sing-box 版本信息，请检查网络连接或 GitHub API 访问"
+      error "版本查询失败，请检查 GitHub 连接"
       exit 1
     fi
   fi
 
   DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/${LATEST_VERSION}/sing-box-${LATEST_VERSION:1}-linux-${ARCH}.tar.gz"
-  log "下载版本: ${LATEST_VERSION}, 架构: ${ARCH}"
+  log "下载 sing-box ${LATEST_VERSION}（${ARCH}）…"
 
   # 下载并解压
-  wget -q -O "/tmp/sing-box.tar.gz" "$DOWNLOAD_URL" || {
-    error "下载 sing-box 失败，请检查网络连接"
+  TEMP_DIR=$(mktemp -d /tmp/sing-box.XXXXXXXXXX) || {
+    error "临时目录创建失败，请检查 /tmp"
+    exit 1
+  }
+  wget -q --timeout=30 --tries=3 -O "$TEMP_DIR/sing-box.tar.gz" "$DOWNLOAD_URL" || {
+    error "下载失败，请检查 GitHub 连接"
     exit 1
   }
   
   # 验证下载文件
-  if [ -s "/tmp/sing-box.tar.gz" ]; then
-    log "下载完成，验证文件..."
+  if [ -s "$TEMP_DIR/sing-box.tar.gz" ]; then
+    log "解压安装包…"
   else
-    error "下载的文件为空，请检查网络连接或下载链接"
+    error "安装包为空，请重新下载"
     exit 1
   fi
 
-  tar -xzf "/tmp/sing-box.tar.gz" -C "/tmp" || {
-    error "解压 sing-box 失败"
+  tar -xzf "$TEMP_DIR/sing-box.tar.gz" -C "$TEMP_DIR" || {
+    error "解压失败，请检查安装包和磁盘空间"
     exit 1
   }
 
   # 移动文件并清理
-  mv "/tmp/sing-box-${LATEST_VERSION:1}-linux-${ARCH}/sing-box" "$INSTALL_DIR/sing-box" || {
-    error "安装 sing-box 失败"
+  mv "$TEMP_DIR/sing-box-${LATEST_VERSION:1}-linux-${ARCH}/sing-box" "$INSTALL_DIR/sing-box" || {
+    error "程序安装失败：$INSTALL_DIR"
     exit 1
   }
 
-  rm -rf "/tmp/sing-box.tar.gz" "/tmp/sing-box-${LATEST_VERSION:1}-linux-${ARCH}"
-  chmod +x "$INSTALL_DIR/sing-box"
-  log "sing-box 已安装到 $INSTALL_DIR/sing-box"
+  cleanup_temp_files
+  chmod +x "$INSTALL_DIR/sing-box" || {
+    error "执行权限设置失败：$INSTALL_DIR/sing-box"
+    exit 1
+  }
+  log "程序：$INSTALL_DIR/sing-box"
 }
 
 # 生成 REALITY 密钥对
 generate_reality_keypair() {
-  log "生成 REALITY 密钥对..."
-  warn "这可能需要一些时间，请耐心等待..."
-  REALITY_KEYPAIR=$($INSTALL_DIR/sing-box generate reality-keypair)
-  if [ $? -ne 0 ]; then
-    error "生成 REALITY 密钥对失败"
+  log "生成 REALITY 密钥…"
+  if ! REALITY_KEYPAIR=$("$INSTALL_DIR/sing-box" generate reality-keypair); then
+    error "REALITY 密钥生成失败"
     exit 1
   fi
   PRIVATE_KEY=$(echo "$REALITY_KEYPAIR" | grep "PrivateKey" | awk '{print $2}' | tr -d '"')
   PUBLIC_KEY=$(echo "$REALITY_KEYPAIR" | grep "PublicKey" | awk '{print $2}' | tr -d '"')
-  log "REALITY 密钥对已生成！"
+  if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
+    error "REALITY 密钥不完整"
+    exit 1
+  fi
+  log "REALITY 密钥已生成"
 }
 
 # 创建配置文件
 create_config_file() {
-  log "创建配置文件..."
-  mkdir -p "$CONFIG_DIR"
-  cat > "$CONFIG_FILE" <<EOF
+  log "保存配置…"
+  mkdir -p "$CONFIG_DIR" || {
+    error "配置目录创建失败：$CONFIG_DIR"
+    exit 1
+  }
+  if ! cat > "$CONFIG_FILE" <<EOF
 {
   "inbounds": [
     {
@@ -248,15 +300,19 @@ create_config_file() {
   ]
 }
 EOF
-  log "配置文件已生成：$CONFIG_FILE"
+  then
+    error "配置保存失败：$CONFIG_FILE"
+    exit 1
+  fi
+  log "配置：$CONFIG_FILE"
 }
 
 # 创建 systemd 服务
 create_systemd_service() {
-  log "创建 systemd 服务文件..."
-  cat > "$SERVICE_FILE" <<EOF
+  log "设置系统服务…"
+  if ! cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=sing-box Service
+Description=sing-box
 After=network.target
 
 [Service]
@@ -268,25 +324,29 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 EOF
+  then
+    error "服务文件保存失败：$SERVICE_FILE"
+    exit 1
+  fi
 
   systemctl daemon-reload || {
-    error "重新加载 systemd 失败"
+    error "服务加载失败：systemctl daemon-reload"
     exit 1
   }
-  log "systemd 服务文件已创建：$SERVICE_FILE"
+  log "服务：$SERVICE_FILE"
 }
 
 # 打印客户端配置
 print_client_config() {
-  log "获取服务器 IP 地址..."
-  SERVER_IP=$(curl -s https://api.ipify.org)
+  log "获取公网 IP…"
+  SERVER_IP=$(curl -fsS --connect-timeout 5 --max-time 10 https://api.ipify.org) || SERVER_IP=""
   if [[ -z "$SERVER_IP" ]]; then
-    warn "无法获取服务器 IP 地址，将使用 localhost 代替"
+    warn "公网 IP 获取失败，导入前将 localhost 替换为服务器 IP"
     SERVER_IP="localhost"
   fi
 
-  VLESS_URL="vless://${UUID}@${SERVER_IP}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DOMAIN}&publicKey=${PUBLIC_KEY}&shortId=${SHORT_ID}#${SERVER_IP}"
-  CLASH_META_CONFIG="proxies:
+  VLESS_URL="vless://${UUID}@${SERVER_IP}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DOMAIN}&fp=chrome&publicKey=${PUBLIC_KEY}&shortId=${SHORT_ID}#${SERVER_IP}"
+  MIHOMO_CONFIG="proxies:
   - name: ${SERVER_IP}
     server: ${SERVER_IP}
     port: ${PORT}
@@ -303,56 +363,103 @@ print_client_config() {
 
   # 打印配置信息
   echo
-  echo -e "${BLUE}====== 客户端配置 (VLESS URL) ======${NC}"
+  echo -e "${BLUE}── VLESS ──${NC}"
   echo "$VLESS_URL"
   echo
-  echo -e "${BLUE}====== 客户端配置 (Clash Meta 格式) ======${NC}"
-  echo -e "$CLASH_META_CONFIG"
+  echo -e "${BLUE}── Mihomo ──${NC}"
+  echo -e "$MIHOMO_CONFIG"
+  echo
+  echo -e "${BLUE}── sing-box ──${NC}"
+  cat <<EOF
+{
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "${SERVER_IP}",
+      "server": "${SERVER_IP}",
+      "server_port": ${PORT},
+      "uuid": "${UUID}",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "${DOMAIN}",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "${PUBLIC_KEY}",
+          "short_id": "${SHORT_ID}"
+        }
+      }
+    }
+  ]
+}
+EOF
   echo
 }
 
 start_service() {
-  log "启动 sing-box 服务..."
+  local service_enabled=true
+  log "启动服务…"
   systemctl start sing-box || {
-    error "启动 sing-box 服务失败，请检查日志: journalctl -u sing-box"
+    error "启动失败，查看日志：journalctl -u sing-box -n 50 --no-pager"
     exit 1
   }
 
   systemctl enable sing-box || {
-    warn "设置 sing-box 服务开机启动失败"
+    service_enabled=false
+    warn "自启设置失败，重试：systemctl enable sing-box"
   }
 
   # 检查服务状态
   if systemctl is-active --quiet sing-box; then
-    log "sing-box 服务已成功启动并设置为开机启动！"
+    if [[ "$service_enabled" == true ]]; then
+      log "服务已启动，已开启自启"
+    else
+      log "服务已启动，未能设置自启"
+    fi
   else
-    error "sing-box 服务启动失败，请检查日志: journalctl -u sing-box"
+    error "服务未运行，查看日志：journalctl -u sing-box -n 50 --no-pager"
     exit 1
+  fi
+}
+
+# 仅清理本次安装创建的临时目录
+cleanup_temp_files() {
+  if [[ -n "$TEMP_DIR" ]]; then
+    if rm -rf -- "$TEMP_DIR"; then
+      TEMP_DIR=""
+    else
+      warn "临时目录清理失败：$TEMP_DIR"
+    fi
   fi
 }
 
 # 处理中断信号
 cleanup() {
   echo
-  warn "安装被用户中断，正在清理..."
-  rm -rf "/tmp/sing-box.tar.gz" "/tmp/sing-box-"*
+  warn "安装中断，清理临时文件…"
   exit 1
 }
 
 # 设置中断处理
 trap cleanup INT TERM
+trap cleanup_temp_files EXIT
 
 # 主函数
 main() {
-  log "开始安装 sing-box..."
+  log "安装 sing-box · VLESS + REALITY"
   install_dependencies
+  initialize_config_values
   determine_architecture
   install_sing_box
   generate_reality_keypair
   create_config_file
   create_systemd_service
   start_service
-  log "sing-box 安装完成！文件路径：$BASE_DIR"
+  log "安装完成：$BASE_DIR"
   print_client_config
 }
 

@@ -1,67 +1,58 @@
-# 代理服务一键安装脚本
+# sing-box
 
-## sing-box 版本
+自用 VLESS + REALITY 安装脚本。安装后输出 VLESS 链接、Mihomo 和 sing-box 单节点配置。
 
-## 功能介绍
+默认端口 `443`，伪装域名 `itunes.apple.com`，指纹 `chrome`。UUID v4、REALITY 密钥和短 ID 自动生成。
 
-这是一个用于自动安装和配置 sing-box 的脚本，主要功能包括：
+## 安装
 
-- 自动检测系统架构并安装对应版本
-- 自动生成 REALITY 密钥对
-- 配置 VLESS+REALITY 协议
-- 创建并启用 systemd 服务
-- 生成客户端配置信息
+需要 Linux、root 权限、systemd，以及 apt-get 或 yum。服务器需能访问 GitHub 和软件源。
 
-## 系统要求
+以 root 用户运行：
 
-- 支持 Debian/Ubuntu 或 CentOS/RHEL 系列 Linux 系统
-- 需要 root 权限运行
-- 支持的系统架构：amd64, arm64, armv7, armv6, 386, mips64le, mipsle, ppc64le, riscv64, s390x, loong64
-
-## 使用方法
-
-### sing-box 安装
-
-```shell
+```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/irasutoya/sing-box/main/install.sh)
 ```
 
-## 命令选项
+指定参数时，下载后运行：
 
-### sing-box 选项
-
-```shell
-用法: install.sh [选项]
-
-选项:
-  -port        设置监听端口 (默认: 443)
-  -uuid        设置 VLESS UUID (默认: 随机生成)
-  -uninstall   卸载 sing-box 服务及所有相关文件
-  -help        显示帮助信息
+```bash
+curl -fsSL https://raw.githubusercontent.com/irasutoya/sing-box/main/install.sh -o install.sh
+sudo bash install.sh -port 8443
 ```
 
-## 安装路径
+支持架构：amd64、arm64、armv7、armv6、386、mips64le、mipsle、ppc64le、riscv64、s390x、loong64。
 
-### sing-box 路径
+## 参数
 
-- 主目录: `/root/sing-box`
-- 可执行文件: `/root/sing-box/bin/sing-box`
-- 配置文件: `/root/sing-box/config/config.json`
-- 服务文件: `/etc/systemd/system/sing-box.service`
+```text
+用法：bash install.sh [选项]
 
-## 客户端配置
-
-安装完成后，脚本会自动生成以下格式的客户端配置信息：
-
-### sing-box 客户端配置
-
-#### VLESS URL 格式
-
-```
-vless://${UUID}@${SERVER_IP}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DOMAIN}&publicKey=${PUBLIC_KEY}&shortId=${SHORT_ID}#${SERVER_IP}
+  -port        监听端口（1–65535，默认 443）
+  -uuid        UUID v4（默认自动生成）
+  -uninstall   卸载并删除程序、配置
+  -help        显示帮助
 ```
 
-#### Clash Meta 格式
+`-port`、`-uuid` 后需填写值。端口按十进制处理，`00443` 等同于 `443`。
+
+UUID v4 格式：`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`。`x` 为十六进制字符，`y` 为 `8`、`9`、`a` 或 `b`，不区分大小写。
+
+```bash
+sudo bash install.sh -port 8443 -uuid 01234567-89ab-4def-8123-456789abcdef
+```
+
+## 客户端
+
+以下为输出模板，`${...}` 在安装时替换为实际值。公网 IP 获取失败时，导入前将 `localhost` 替换为服务器 IP。
+
+### VLESS
+
+```
+vless://${UUID}@${SERVER_IP}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DOMAIN}&fp=chrome&publicKey=${PUBLIC_KEY}&shortId=${SHORT_ID}#${SERVER_IP}
+```
+
+### Mihomo
 
 ```yaml
 proxies:
@@ -80,14 +71,59 @@ proxies:
     network: tcp
 ```
 
-## 故障排除
+### sing-box
 
-- 如果服务启动失败，可以使用 `journalctl -u sing-box` 查看详细日志
-- 确保防火墙已开放对应端口
-- 如需重新配置，可以先卸载再重新安装
+```json
+{
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "${SERVER_IP}",
+      "server": "${SERVER_IP}",
+      "server_port": ${PORT},
+      "uuid": "${UUID}",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "${DOMAIN}",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "${PUBLIC_KEY}",
+          "short_id": "${SHORT_ID}"
+        }
+      }
+    }
+  ]
+}
+```
 
-## 警告
+## 管理
 
-本程序仅供学习了解, 非盈利目的，请于下载后 24 小时内删除, 不得用作任何商业用途, 文字、数据及图片均有所属版权, 如转载须注明来源。
+```bash
+# 状态
+systemctl status sing-box
 
-使用本程序必循遵守部署免责声明。使用本程序必循遵守部署服务器所在地、所在国家和用户所在国家的法律法规, 程序作者不对使用者任何不当行为负责。
+# 日志
+journalctl -u sing-box -n 50 --no-pager
+
+# 重启
+systemctl restart sing-box
+
+# 帮助
+bash install.sh -help
+
+# 卸载
+sudo bash install.sh -uninstall
+```
+
+- 程序：`/root/sing-box/bin/sing-box`
+- 配置：`/root/sing-box/config/config.json`
+- 服务：`/etc/systemd/system/sing-box.service`
+
+重复安装会覆盖配置并生成新密钥，客户端需同步更新。卸载会删除程序和配置，需要保留时先备份。
+
+安装失败时检查终端报错；无法连接时检查服务状态、防火墙和安全组的监听端口。
