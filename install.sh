@@ -353,15 +353,15 @@ print_client_config() {
     type: vless
     uuid: ${UUID}
     tls: true
+    tfo: false
+    udp: true
     flow: xtls-rprx-vision
     reality-opts:
       public-key: ${PUBLIC_KEY}
       short-id: ${SHORT_ID}
     servername: ${DOMAIN}
     client-fingerprint: chrome
-    network: tcp
-    tfo: false
-    udp: true"
+    network: tcp"
 
   # Print configuration details
   echo

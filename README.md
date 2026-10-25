@@ -62,6 +62,8 @@ proxies:
     type: vless
     uuid: ${UUID}
     tls: true
+    tfo: false
+    udp: true
     flow: xtls-rprx-vision
     reality-opts:
       public-key: ${PUBLIC_KEY}
@@ -69,8 +71,6 @@ proxies:
     servername: ${DOMAIN}
     client-fingerprint: chrome
     network: tcp
-    tfo: false
-    udp: true
 ```
 
 ### sing-box
