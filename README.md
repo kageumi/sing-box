@@ -2,7 +2,7 @@
 
 A personal VLESS + REALITY installation script. Prints a VLESS URL and single-proxy configurations for Mihomo and sing-box after installation.
 
-Defaults: port `443`, server name `itunes.apple.com`, and fingerprint `chrome`. UUID v4, REALITY keys, and a short ID are generated automatically.
+Defaults: port `443`, server name `gateway.icloud.com`, and fingerprint `chrome`. UUID v4, REALITY keys, and a short ID are generated automatically.
 
 ## Installation
 
